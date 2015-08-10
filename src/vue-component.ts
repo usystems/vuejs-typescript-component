@@ -45,32 +45,36 @@ module VueComponent {
 
 	// register a lifecycl hook, http://vuejs.org/api/options.html#Lifecycle
 	export function lifecycleHook(hook:string) {
-		return (cls:any, name:string):void => {
+		return (cls:any, name:string, desc:PropertyDescriptor):PropertyDescriptor => {
 			if ([
 				'created', 'beforeCompile', 'compiled', 'ready', 'attached', 'detached', 'beforeDestroy', 'destroyed'
 			].indexOf(hook) == -1)
 				throw new Error('Unknown Lifecyle Hook: ' + hook);
-			if (!cls.hasOwnProperty('__options__'))
-				cls.__options__ = { ignore: {}, props: {}, hooks: {} };
-			cls.__options__.hooks[name] = function() { this[hook] = cls[name]; };
+			if (!cls.hasOwnProperty('__hooks__'))
+				cls.__hooks__ = {};
+			cls.__hooks__[name] = cls[name];
+			desc.value = void 0;
+			return desc;
 		}
 	}
 
 	// register an event, http://vuejs.org/api/options.html#events
 	export function eventHook(hook:string) {
-		return (cls:any, name:string):void => {
-			if (!cls.hasOwnProperty('__options__'))
-				cls.__options__ = { ignore: {}, props: {}, hooks: {} };
-			cls.__options__.hooks[name] = function() { this.events[hook] = cls[name]; };
+		return (cls:any, name:string, desc:PropertyDescriptor):PropertyDescriptor => {
+			if (!cls.hasOwnProperty('__events__'))
+				cls.__events__ = {};
+			cls.__events__[name] = cls[name];
+			desc.value = void 0;
+			return desc;
 		}
 	}
 
 	// expose the property as attribute
 	export function prop(options) {
 		return function(cls:any, name:string) {
-			if (!cls.hasOwnProperty('__options__'))
-				cls.__options__ = { ignore: {}, props: {}, hooks: {} };
-			cls.__options__.props[name] = options;
+			if (!cls.hasOwnProperty('__props__'))
+				cls.__props__ = {};
+			cls.__props__[name] = options;
 		}
 	}
 
@@ -78,12 +82,9 @@ module VueComponent {
 	export function createComponent(name:string):(cls:any)=>void {
 		return (cls:any):void => {
 
-			let data:any = {};
 			let options:any = {
-				props: {},
-				data: (():any => { return Vue.util.extend({}, data); }),
+				data: (():any => { return new cls(); }),
 				methods: {},
-				events: {},
 				computed: {}
 			};
 
@@ -98,46 +99,38 @@ module VueComponent {
 			let obj:any = new cls();
 			let proto:any = Object.getPrototypeOf(obj);
 
-			// get data
-			Object.getOwnPropertyNames(obj).forEach((prop:string):void => {
-				data[prop] = obj[prop];
-			});
+			if (proto.hasOwnProperty('__props__'))
+				options.props = proto.__props__;
 
-			if (proto.hasOwnProperty('__options__'))
-				Object.getOwnPropertyNames(proto.__options__.props).forEach((prop:string):void => {
-					options.props[prop] = proto.__options__.props[prop];
-				});
+			if (proto.hasOwnProperty('__events__'))
+				options.events = proto.__events__;
+
+			if (proto.hasOwnProperty('__hooks__'))
+				Vue.util.extend(options, proto.__hooks__);
 
 			// get methods
 			Object.getOwnPropertyNames(proto).forEach((method:string):void => {
 
 				// skip the constructor and the internal option keeper
-				if (['constructor', '__options__'].indexOf(method) > -1)
+				if (['constructor'].indexOf(method) > -1)
 					return;
 
-				// decoreated functions
-				if (proto.hasOwnProperty('__options__') && proto.__options__.hooks.hasOwnProperty(method))
-					proto.__options__.hooks[method].call(options);
+				let desc:PropertyDescriptor = Object.getOwnPropertyDescriptor(proto, method);
 
-				else {
+				// normal methods
+				if (typeof desc.value === 'function')
+					options.methods[method] = proto[method];
 
-					let desc:PropertyDescriptor = Object.getOwnPropertyDescriptor(proto, method);
+				// if getter and setter are defied, pass the function as computed property
+				else if(typeof desc.set === 'function')
+					options.computed[method] = {
+						get: desc.get,
+						set: desc.set
+					};
 
-					// normal methods
-					if (typeof desc.value === 'function')
-						options.methods[method] = proto[method];
-
-					// if getter and setter are defied, pass the function as computed property
-					else if(desc.hasOwnProperty('set'))
-						options.computed[method] = {
-							get: desc.get,
-							set: desc.set
-						};
-
-					// if the method only has a getter, just put the getter to the component
-					else
-						options.computed[method] = desc.get;
-				}
+				// if the method only has a getter, just put the getter to the component
+				else if(typeof desc.get === 'function')
+					options.computed[method] = desc.get;
 			});
 
 			// create a Vue component
